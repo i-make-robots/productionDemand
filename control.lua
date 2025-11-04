@@ -56,13 +56,13 @@ local function get_sprite_for(name)
   end
 end
 
-
 -----------------------------------------------------------------
 --  Gather combined production/demand data (items + fluids)
 -----------------------------------------------------------------
 local function collect_data(force, surface)
   local demand = calculate_demand(force)
 
+  -- Factorio stats
   local item_stats  = force.get_item_production_statistics(surface)
   local fluid_stats = force.get_fluid_production_statistics(surface)
   local window = defines.flow_precision_index.one_minute
@@ -94,7 +94,30 @@ local function collect_data(force, surface)
   end
 
   -----------------------------------------------------------------
-  -- Combine production and demand
+  --  Fallback: estimate production for untracked recipes
+  -----------------------------------------------------------------
+  local craft_types = get_crafting_entity_types()
+  for _, surface in pairs(game.surfaces) do
+    for _, e in pairs(surface.find_entities_filtered{force = force}) do
+      if e.valid and craft_types[e.type] then
+        local recipe = e.get_recipe()
+        if recipe then
+          local speed = e.crafting_speed or e.prototype.crafting_speed or 1
+          local crafts_per_second = speed / (recipe.energy or 1)
+          for _, out in pairs(recipe.products) do
+            local name = out.name or (out[1] or "")
+            local amount = out.amount or ((out.amount_min + out.amount_max) / 2)
+            if name and amount then
+              production[name] = (production[name] or 0) + amount * crafts_per_second
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -----------------------------------------------------------------
+  --  Merge production & demand
   -----------------------------------------------------------------
   local combined, seen = {}, {}
   for name, d in pairs(demand) do
@@ -175,6 +198,7 @@ local function build_scroll(parent)
   scroll.style.padding = 2
   return scroll
 end
+
 -----------------------------------------------------------------
 --  Fill the list
 -----------------------------------------------------------------
