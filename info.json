@@ -1,0 +1,8 @@
+{
+    "name": "productionDemand",
+    "version": "0.1.0",
+    "title": "Production/Demand Window",
+    "author": "i-make-robots",
+    "description": "A window showing total production and demand, rather than consumption",
+    "factorio_version": "2.0"
+}
