@@ -11,7 +11,27 @@ data:extend({
   {
     type = "custom-input",
     name = "productionDemand-toggle",
-    key_sequence = "CONTROL + F",
     consuming = "none"
   }
 })
+
+-- ==============================================================
+--  GUI Styles for productionDemand
+-- ==============================================================
+
+local styles = data.raw["gui-style"]["default"]
+
+styles["productionDemand_table"] = {
+  type = "table_style",
+  -- parent = "table", -- safest base table style in 2.0
+  horizontal_spacing = 8,
+  vertical_spacing = 2,
+  draw_horizontal_lines = true,
+  draw_vertical_lines = false,
+  column_alignments = {
+    {column = 1, alignment = "center"},
+    {column = 2, alignment = "right"},
+    {column = 3, alignment = "right"},
+    {column = 4, alignment = "right"},
+  }
+}

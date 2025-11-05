@@ -2,8 +2,20 @@
 --  productionDemand  --  Factorio 2.0 clean numeric dashboard
 -- ==============================================================
 
+
 local crafting_entity_types
 local current_sort = {column = "difference", descending = true}
+
+-----------------------------------------------------------------
+--  Persistent data setup  (Factorio 2.0)
+-----------------------------------------------------------------
+script.on_init(function()
+  storage.open_players = {}
+end)
+
+script.on_configuration_changed(function()
+  storage.open_players = storage.open_players or {}
+end)
 
 -----------------------------------------------------------------
 --  Cache craftable entity types
@@ -43,6 +55,69 @@ local function calculate_demand(force)
   return demand
 end
 
+
+-----------------------------------------------------------------
+--  Fill the table with live data
+-----------------------------------------------------------------
+local function populate_table(tbl, data, filter)
+  tbl.clear()
+  local f = string.lower(filter or "")
+
+  for _, v in ipairs(data) do
+    if f == "" or string.find(string.lower(v.name), f, 1, true) then
+      -- Sprite + tooltip
+      local sprite, tooltip
+      if prototypes.item[v.name] then
+        sprite = "item/" .. v.name
+        tooltip = prototypes.item[v.name].localised_name
+      elseif prototypes.fluid[v.name] then
+        sprite = "fluid/" .. v.name
+        tooltip = prototypes.fluid[v.name].localised_name
+      else
+        sprite = "utility/questionmark"
+        tooltip = v.name
+      end
+
+                   tbl.add{type = "sprite", sprite = sprite, tooltip = tooltip}
+      local prod = tbl.add{type = "label", caption = string.format("%.2f", v.production)}
+      local dema = tbl.add{type = "label", caption = string.format("%.2f", v.demand)}
+      local diff = tbl.add{type = "label", caption = string.format("%.2f", v.difference) }
+
+      prod.style.horizontally_stretchable = true
+      dema.style.horizontally_stretchable = true
+      diff.style.horizontally_stretchable = true
+
+      diff.style.font_color = (v.difference >= 0)
+        and {r=0.2, g=1.0, b=0.2}
+        or  {r=1.0, g=0.2, b=0.2}
+    end
+  end
+end
+
+
+-----------------------------------------------------------------
+--  Build table inside scroll container
+-----------------------------------------------------------------
+local function build_table(parent)
+  local scroll = parent.add{
+    type = "scroll-pane",
+    horizontal_scroll_policy = "never",
+    vertical_scroll_policy = "auto"
+  }
+  scroll.style.maximal_height = 600
+  scroll.style.minimal_width = 500
+
+  local tbl = scroll.add{
+    type = "table",
+    name = "productionDemand_table",
+    style = "productionDemand_table",  -- use our custom data-stage style
+    column_count = 4
+  }
+
+  return tbl
+end
+
+
 -----------------------------------------------------------------
 --  Helpers
 -----------------------------------------------------------------
@@ -55,70 +130,49 @@ local function get_sprite_for(name)
     return "utility/questionmark"
   end
 end
-
 -----------------------------------------------------------------
---  Gather combined production/demand data (items + fluids)
+--  Gather real production + consumption data (items + fluids)
 -----------------------------------------------------------------
 local function collect_data(force, surface)
-  local demand = calculate_demand(force)
-
-  -- Factorio stats
   local item_stats  = force.get_item_production_statistics(surface)
   local fluid_stats = force.get_fluid_production_statistics(surface)
   local window = defines.flow_precision_index.one_minute
 
-  local production = {}
+  local production, demand = {}, {}
 
-  -- Items
+  -- === ITEMS ===
   for name, _ in pairs(item_stats.input_counts) do
-    local rate = item_stats.get_flow_count{
+    local prod = item_stats.get_flow_count{
       name = name,
       precision_index = window,
       category = "input"
     }
-    if rate and rate > 0 then
-      production[name] = rate
-    end
+    local cons = item_stats.get_flow_count{
+      name = name,
+      precision_index = window,
+      category = "output"
+    }
+    if prod and prod > 0 then production[name] = prod end
+    if cons and cons > 0 then demand[name] = cons end
   end
 
-  -- Fluids
+  -- === FLUIDS ===
   for name, _ in pairs(fluid_stats.input_counts) do
-    local rate = fluid_stats.get_flow_count{
+    local prod = fluid_stats.get_flow_count{
       name = name,
       precision_index = window,
       category = "input"
     }
-    if rate and rate > 0 then
-      production[name] = rate
-    end
+    local cons = fluid_stats.get_flow_count{
+      name = name,
+      precision_index = window,
+      category = "output"
+    }
+    if prod and prod > 0 then production[name] = prod end
+    if cons and cons > 0 then demand[name] = cons end
   end
 
-  -----------------------------------------------------------------
-  --  Fallback: estimate production for untracked recipes
-  -----------------------------------------------------------------
-  local craft_types = get_crafting_entity_types()
-  for _, surface in pairs(game.surfaces) do
-    for _, e in pairs(surface.find_entities_filtered{force = force}) do
-      if e.valid and craft_types[e.type] then
-        local recipe = e.get_recipe()
-        if recipe then
-          local speed = e.crafting_speed or e.prototype.crafting_speed or 1
-          local crafts_per_second = speed / (recipe.energy or 1)
-          for _, out in pairs(recipe.products) do
-            local name = out.name or (out[1] or "")
-            local amount = out.amount or ((out.amount_min + out.amount_max) / 2)
-            if name and amount then
-              production[name] = (production[name] or 0) + amount * crafts_per_second
-            end
-          end
-        end
-      end
-    end
-  end
-
-  -----------------------------------------------------------------
-  --  Merge production & demand
-  -----------------------------------------------------------------
+  -- === Combine ===
   local combined, seen = {}, {}
   for name, d in pairs(demand) do
     combined[name] = {name = name, demand = d, production = production[name] or 0}
@@ -199,51 +253,6 @@ local function build_scroll(parent)
   return scroll
 end
 
------------------------------------------------------------------
---  Fill the list
------------------------------------------------------------------
-local function populate_scroll(scroll, data, filter)
-  scroll.clear()
-  local f = string.lower(filter or "")
-  for _, v in ipairs(data) do
-    if f == "" or string.find(string.lower(v.name), f, 1, true) then
-      local row = scroll.add{type="flow", direction="horizontal"}
-      row.style.vertical_align = "center"
-      row.style.horizontal_spacing = 8
-
-      -- Tooltip with localised name of item.
-      local sprite, tooltip
-      if prototypes.item[v.name] then
-        sprite = "item/" .. v.name
-        tooltip = prototypes.item[v.name].localised_name
-      elseif prototypes.fluid[v.name] then
-        sprite = "fluid/" .. v.name
-        tooltip = prototypes.fluid[v.name].localised_name
-      else
-        sprite = "utility/questionmark"
-        tooltip = v.name
-      end
-
-      local icon = row.add{type="sprite", sprite=sprite, tooltip=tooltip}
-      icon.style.width = 36
-
-      local prod = row.add{type="label", caption=string.format("%.2f", v.production)}
-      local dem  = row.add{type="label", caption=string.format("%.2f", v.demand)}
-      local diff = row.add{type="label", caption=string.format("%.2f", v.difference)}
-
-      prod.style.horizontally_stretchable = true
-      dem.style.horizontally_stretchable = true
-      diff.style.horizontally_stretchable = true
-
-      prod.style.horizontal_align = "right"
-      dem.style.horizontal_align = "right"
-      diff.style.horizontal_align = "right"
-      diff.style.font_color = (v.difference >= 0)
-        and {r=0.2, g=1.0, b=0.2}
-        or  {r=1.0, g=0.2, b=0.2}
-    end
-  end
-end
 
 -----------------------------------------------------------------
 --  Build full GUI
@@ -251,6 +260,10 @@ end
 local function build_gui(player)
   if not (player and player.valid) then return end
   if player.gui.screen.productionDemand then player.gui.screen.productionDemand.destroy() end
+
+  -- Make sure our persistent table exists even if on_init() hasn't fired yet
+  storage.open_players = storage.open_players or {}
+  storage.open_players[player.index] = true
 
   local frame = player.gui.screen.add{
     type="frame",
@@ -290,12 +303,13 @@ local function build_gui(player)
 
   -- Content
   build_header(frame)
-  local scroll = build_scroll(frame)
-
+  local tbl = build_table(frame)
   local data = collect_data(player.force, player.surface)
   sort_data(data)
-  populate_scroll(scroll, data, "")
+  populate_table(tbl, data, "")
   player.opened = frame
+
+  storage.open_players[player.index] = true
 end
 
 -----------------------------------------------------------------
@@ -304,7 +318,9 @@ end
 local function rebuild(player)
   local frame = player.gui.screen.productionDemand
   if not (frame and frame.valid) then return end
-  local scroll = frame.children[#frame.children]
+
+  local tbl = frame.children[#frame.children].children[1]
+
   local data = collect_data(player.force, player.surface)
   sort_data(data)
 
@@ -315,7 +331,7 @@ local function rebuild(player)
     end
   end
 
-  populate_scroll(scroll, data, filter)
+  populate_table(tbl, data, filter)
 end
 
 -----------------------------------------------------------------
@@ -339,6 +355,7 @@ script.on_event(defines.events.on_gui_click, function(e)
   if name == "productionDemand_close" then
     local frame = e.element.parent.parent
     if frame and frame.valid then frame.destroy() end
+    storage.open_players[player.index] = nil
   elseif string.find(name, "^sort_") then
     local col = string.match(name, "^sort_(.+)")
     if col and col ~= "" then
@@ -355,5 +372,32 @@ end)
 script.on_event(defines.events.on_gui_text_changed, function(e)
   if e.element.name == "productionDemand_search" then
     rebuild(game.get_player(e.player_index))
+  end
+end)
+
+-----------------------------------------------------------------
+--  Periodic refresh (once per second)
+-----------------------------------------------------------------
+script.on_event(defines.events.on_tick, function(e)
+  -- In case this runs before on_init (rare on first load)
+  if not storage then return end
+  if not storage.open_players then return end
+
+  if (e.tick % 60) ~= 0 then return end   -- every 60 ticks = 1 s
+
+  for index in pairs(storage.open_players) do
+    local player = game.get_player(index)
+    if player and player.valid then
+      local frame = player.gui.screen.productionDemand
+      if frame and frame.valid then
+        -- Use your rebuild() to update live data
+        rebuild(player)
+      else
+        -- GUI was closed manually or by another mod
+        storage.open_players[index] = nil
+      end
+    else
+      storage.open_players[index] = nil
+    end
   end
 end)
